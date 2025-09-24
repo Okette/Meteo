@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Météo Germignac — Prévisions locales</title>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- Icônes -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet"/>
+
+  <link rel="stylesheet" href="styles.css" />
+  <meta name="description" content="Météo élégante : observation, graphique horaire, carte de la semaine et ensoleillement PV (PVGIS)." />
+</head>
+<body class="min-h-screen bg-gradient-to-br from-sky-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 text-slate-800 dark:text-slate-100">
+  <!-- Header -->
+  <header class="sticky top-0 z-20 backdrop-blur supports-[backdrop-filter]:bg-white/40 dark:supports-[backdrop-filter]:bg-slate-900/40 border-b border-white/20 dark:border-slate-800">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center gap-3">
+      <i class="fa-solid fa-sun text-amber-400 text-2xl drop-shadow"></i>
+      <h1 class="text-xl font-semibold">Météo — <span id="app-title" class="font-bold">Germignac</span></h1>
+      <nav class="ml-6">
+        <ul class="tabs" role="tablist" aria-label="Sections météo">
+          <li><button role="tab" aria-selected="true" aria-controls="tab-overview" id="tabbtn-overview" class="tab active"><i class="fa-solid fa-gauge-high mr-1"></i> Aperçu</button></li>
+          <li><button role="tab" aria-selected="false" aria-controls="tab-weekmap" id="tabbtn-weekmap" class="tab"><i class="fa-solid fa-map mr-1"></i> Carte de la semaine</button></li>
+<li><button role="tab" aria-selected="false" aria-controls="tab-weekhour" id="tabbtn-weekhour" class="tab">
+  <i class="fa-solid fa-table-cells-large mr-1"></i> Carte horaire
+</button></li>
+          <li><button role="tab" aria-selected="false" aria-controls="tab-sun" id="tabbtn-sun" class="tab"><i class="fa-solid fa-solar-panel mr-1"></i> Ensoleillement</button></li>
+        </ul>
+      </nav>
+      <div class="ml-auto flex items-center gap-2">
+        <button id="themeToggle" class="btn ghost" title="Basculer clair/sombre">
+          <i class="fa-solid fa-circle-half-stroke"></i>
+        </button>
+        <a class="btn primary" href="https://www.meteociel.fr/previsions/5087/germignac.htm" target="_blank" rel="noopener">Météociel (réf)</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main -->
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <!-- Barre de recherche -->
+    <section class="glass p-4 md:p-5 rounded-2xl mb-6">
+      <div class="flex flex-col md:flex-row gap-3 items-stretch">
+        <div class="flex-1 relative">
+          <label for="place" class="sr-only">Commune</label>
+          <input id="place" type="text" placeholder="Tape une commune (ex : Germignac)" class="w-full input" autocomplete="off" />
+          <ul id="suggestions" class="absolute z-10 left-0 right-0 mt-1 hidden bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg max-h-72 overflow-auto"></ul>
+        </div>
+        <button id="btnFetch" class="btn accent">
+          <i class="fa-solid fa-magnifying-glass mr-2"></i> Charger la météo
+        </button>
+        <button id="btnLocate" class="btn outline">
+          <i class="fa-solid fa-location-crosshairs mr-2"></i> Autour de moi
+        </button>
+      </div>
+      <p id="status" class="text-sm mt-2 text-slate-600 dark:text-slate-400"></p>
+    </section>
+
+    <!-- Onglet 1 : Aperçu -->
+    <section id="tab-overview" role="tabpanel" aria-labelledby="tabbtn-overview">
+      <!-- Cartes “Maintenant / Vent / UV” -->
+      <section class="grid md:grid-cols-3 gap-4 mb-6">
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title"><i class="fa-solid fa-clock mr-2"></i>Maintenant</h2>
+            <span id="obs-time" class="badge">—</span>
+          </div>
+          <div class="flex items-end gap-4">
+            <div class="text-5xl font-semibold leading-none"><span id="temp-now">—</span>°C</div>
+            <div class="flex-1 grid grid-cols-2 gap-3 text-sm">
+              <div class="kv"><span>Ressentie</span><strong id="temp-feels">—°C</strong></div>
+              <div class="kv"><span>Vent</span><strong id="wind">— km/h</strong></div>
+              <div class="kv"><span>Pluie 1h</span><strong id="rain-now">— mm</strong></div>
+              <div class="kv"><span>Nuages</span><strong id="clouds">— %</strong></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title"><i class="fa-solid fa-wind mr-2"></i>Vent & Beaufort</h2>
+          </div>
+          <div class="flex items-center justify-between">
+            <div class="text-4xl font-semibold"><span id="wind-bft">—</span> Bft</div>
+            <div class="text-sm text-right">
+              <div><span class="opacity-70">Direction</span> <strong id="wind-dir">—°</strong></div>
+              <div><span class="opacity-70">Rafales</span> <strong id="wind-gust">— km/h</strong></div>
+            </div>
+          </div>
+          <div class="mt-3 w-full bg-slate-200/70 dark:bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div id="wind-bar" class="h-2 bg-emerald-500 transition-all" style="width:0%"></div>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-header">
+            <h2 class="card-title"><i class="fa-solid fa-sun-plant-wilt mr-2"></i>Indice UV & pluie</h2>
+          </div>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div class="kv"><span>UV max jour</span><strong id="uv">—</strong></div>
+            <div class="kv"><span>Prob. pluie (proch. 1 h)</span><strong id="pop-now">—%</strong></div>
+            <div class="kv"><span>Point de rosée</span><strong id="dew">—°C</strong></div>
+            <div class="kv"><span>Pression</span><strong id="msl">— hPa</strong></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- Prévisions 7 jours (liste) -->
+      <section class="card mb-10">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fa-solid fa-calendar-week mr-2"></i>7 jours</h2>
+        </div>
+        <div id="daily" class="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+      </section>
+
+      <!-- Graphique horaire -->
+      <section class="card mb-6">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fa-solid fa-chart-line mr-2"></i>Tendance 24 h</h2>
+          <div class="text-sm text-slate-500 dark:text-slate-400">Température, pluie, vent</div>
+          <div class="flex items-center gap-2">
+            <button id="toggleChart" class="btn outline">
+              <i class="fa-solid fa-arrows-rotate mr-1"></i> Courbe / histogramme
+            </button>
+            <label class="switch">
+              <input type="checkbox" id="windMode" />
+              <span></span>
+              <em>Rafales</em>
+            </label>
+          </div>
+        </div>
+        <canvas id="hourlyChart" height="120"></canvas>
+      </section>
+    </section> <!-- /#tab-overview -->
+
+    <!-- Onglet 2 : Carte de la semaine -->
+    <section id="tab-weekmap" role="tabpanel" aria-labelledby="tabbtn-weekmap" hidden>
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fa-solid fa-map mr-2"></i>Carte de la semaine</h2>
+          <div class="text-sm text-slate-500 dark:text-slate-400">Icônes, T° min/max, pluie, vent</div>
+        </div>
+        <div class="mb-4 flex flex-wrap gap-3 text-sm">
+          <span class="legend"><i class="fa-solid fa-temperature-half mr-1"></i>T° min/max</span>
+          <span class="legend"><i class="fa-solid fa-umbrella mr-1"></i>Pluie (mm)</span>
+          <span class="legend"><i class="fa-solid fa-wind mr-1"></i>Vent max (km/h)</span>
+        </div>
+        <div id="week-map" class="weekmap-grid"></div>
+      </section>
+    </section>
+<!-- Onglet 2 bis : Carte horaire (semaine, heure par heure) -->
+<section id="tab-weekhour" role="tabpanel" aria-labelledby="tabbtn-weekhour" hidden>
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title"><i class="fa-solid fa-clock-rotate-left mr-2"></i>Carte horaire (7 jours)</h2>
+      <div class="flex items-center gap-2">
+        <span class="legend"><i class="fa-solid fa-temperature-half"></i> Temp</span>
+        <span class="legend"><i class="fa-solid fa-umbrella"></i> Pluie</span>
+        <span class="legend"><i class="fa-solid fa-wind"></i> Vent</span>
+      </div>
+    </div>
+
+    <!-- Ruban de jours -->
+    <div id="wh-days" class="wh-daytabs"></div>
+
+    <!-- Filtres couches -->
+    <div class="wh-filters">
+      <label class="wh-chip"><input type="checkbox" id="wh-temp" checked /> Température</label>
+      <label class="wh-chip"><input type="checkbox" id="wh-rain" checked /> Pluie</label>
+      <label class="wh-chip"><input type="checkbox" id="wh-wind" checked /> Vent</label>
+    </div>
+
+    <!-- Grille horaire -->
+    <div class="wh-scroll">
+      <div id="wh-grid" class="wh-grid"></div>
+    </div>
+
+    <div class="wh-help">Astuce : faites défiler horizontalement pour explorer toutes les heures.</div>
+  </section>
+</section>
+
+    <!-- Onglet 3 : Ensoleillement (PVGIS) -->
+    <section id="tab-sun" role="tabpanel" aria-labelledby="tabbtn-sun" hidden>
+      <section class="card">
+        <div class="card-header">
+          <h2 class="card-title"><i class="fa-solid fa-solar-panel mr-2"></i>Ensoleillement & PV (PVGIS)</h2>
+          <div class="text-sm text-slate-500 dark:text-slate-400">Durée d’ensoleillement (approx) & énergie quotidienne estimée</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <label class="flex items-center gap-2">Puissance installée :
+            <input id="pvPeak" type="number" min="0.1" step="0.1" value="3" class="input w-28" /> kWc
+          </label>
+          <button id="pvReload" class="btn outline"><i class="fa-solid fa-rotate mr-1"></i> Actualiser</button>
+          <span id="pvStatus" class="text-sm opacity-80"></span>
+        </div>
+        <div id="sun-grid" class="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3"></div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="max-w-6xl mx-auto px-4 py-8 text-sm opacity-75">
+    Sources : Open-Meteo (API libre) & PVGIS (JRC). Interface © toi.
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
