@@ -6,7 +6,7 @@ const GEO_URL = "https://geocoding-api.open-meteo.com/v1/search?language=fr&coun
 const FORECAST_URL = ({ lat, lon }) =>
   `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&timezone=Europe%2FParis`
   + `&current=temperature_2m,apparent_temperature,precipitation,cloud_cover,pressure_msl,wind_speed_10m,wind_gusts_10m,wind_direction_10m`
-  + `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,uv_index`
+  + `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,precipitation_probability,precipitation,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,uv_index,shortwave_radiation`
   + `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,uv_index_max,wind_speed_10m_max`;
 
 const PVGIS_URL = ({ lat, lon, peak }) => {
@@ -17,6 +17,8 @@ const PVGIS_URL = ({ lat, lon, peak }) => {
     + `&pvtechchoice=crystSi&peakpower=${peak}&mountingplace=free&angle=${angle}&aspect=${aspect}&loss=${loss}`
     + `&timeformat=iso8601&outputformat=json&browser=1&_=${Date.now()}`;
 };
+const OM_SOLAR_URL = ({ lat, lon }) =>
+  `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=shortwave_radiation&timezone=Europe%2FParis`;
 
 /* ==============================
    ÉTAT & OUTILS
@@ -29,18 +31,19 @@ let lastGeo   = { lat: null, lon: null };
 
 const $ = (id) => document.getElementById(id);
 const $status = $("status");
-const $title = $("app-title");
+const $title  = $("app-title");
 
 function setStatus(msg, type = "info") {
   const colors = { info: "", ok: "text-emerald-600", warn: "text-amber-600", err: "text-red-600" };
-  if (!$status) return;
-  $status.className = `text-sm mt-2 ${colors[type] || ""}`;
-  $status.textContent = msg || "";
+  if ($status) {
+    $status.className = `text-sm mt-2 ${colors[type] || ""}`;
+    $status.textContent = msg || "";
+  }
 }
 const NX = (v, fb) => (v === null || v === undefined || Number.isNaN(v) ? fb : v);
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
-function toFixed(n, d = 0) { return (n === null || n === undefined || Number.isNaN(n)) ? "—" : Number(n).toFixed(d); }
-function arr(a) { return Array.isArray(a) ? a : []; }
+const toFixed = (n, d = 0) => (n === null || n === undefined || Number.isNaN(n)) ? "—" : Number(n).toFixed(d);
+const arr = (a) => Array.isArray(a) ? a : [];
 const fmtHour = (t) => new Date(t).toLocaleTimeString("fr-FR", { hour: "2-digit" });
 
 /* --- util météo --- */
@@ -49,13 +52,13 @@ function beaufort(speedKmh) {
   return s < 2 ? 0 : s < 6 ? 1 : s < 12 ? 2 : s < 20 ? 3 : s < 29 ? 4 : s < 39 ? 5 : s < 50 ? 6 : s < 62 ? 7 : s < 75 ? 8 : s < 89 ? 9 : s < 103 ? 10 : s < 118 ? 11 : 12;
 }
 function degToArrow(deg) {
-  const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSO","SO","OSO","O","ONO","NO","NNO"];
+  const dirs = ["N","NNE","NE","ENE","E","ESE","SE","S","SSO","SO","OSO","O","ONO","NO","NNO"];
   return dirs[Math.round(((deg % 360) / 22.5)) % 16];
 }
 function wmoIcon(code) {
   if (code === 0) return "fa-sun";
-  if ([1, 2, 3].includes(code)) return "fa-cloud-sun";
-  if ([45, 48].includes(code)) return "fa-smog";
+  if ([1,2,3].includes(code)) return "fa-cloud-sun";
+  if ([45,48].includes(code)) return "fa-smog";
   if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return "fa-cloud-showers-heavy";
   if (code >= 71 && code <= 77) return "fa-snowflake";
   if (code >= 95) return "fa-cloud-bolt";
@@ -63,31 +66,29 @@ function wmoIcon(code) {
 }
 function formatDay(d) {
   const dt = new Date(d);
-  return dt.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit" });
+  return dt.toLocaleDateString("fr-FR", { weekday:"short", day:"2-digit" });
 }
 
 /* --- dégradé intelligent pour 7 jours (pluie + T°) --- */
 function dayGradientSmart({ code, rain = 0, tmax = null }) {
-  const r = clamp01(rain / 25);            // pluie 0..25 mm
+  const r = clamp01(rain / 25);
   const t = tmax == null ? 0 : clamp01((tmax - 5) / 20); // 5°C→0, 25°C→1
 
   let c1, c2, baseAlpha = 0.10;
-  if (code === 0) {               // beau
-    c1 = [255, 255, 200]; c2 = [173, 216, 230]; baseAlpha = 0.12 + 0.18 * t;
-  } else if ([1, 2, 3, 45, 48].includes(code)) { // nuageux
-    c1 = [200, 200, 200]; c2 = [255, 255, 255]; baseAlpha = 0.12 + 0.05 * r + 0.10 * t;
-  } else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) { // pluie
-    c1 = [70, 130, 180]; c2 = [30, 60, 120]; baseAlpha = 0.15 + 0.25 * r + 0.05 * t;
-  } else if (code >= 71 && code <= 77) {   // neige
-    c1 = [180, 200, 255]; c2 = [255, 255, 255]; baseAlpha = 0.12 + 0.10 * r;
-  } else if (code >= 95) {                 // orage
-    c1 = [90, 90, 120]; c2 = [40, 40, 70]; baseAlpha = 0.15 + 0.15 * r;
-  } else {                                 // défaut
-    c1 = [230, 230, 230]; c2 = [250, 250, 250]; baseAlpha = 0.10 + 0.10 * t;
+  if (code === 0) {
+    c1 = [255,255,200]; c2 = [173,216,230]; baseAlpha = 0.12 + 0.18*t;
+  } else if ([1,2,3,45,48].includes(code)) {
+    c1 = [200,200,200]; c2 = [255,255,255]; baseAlpha = 0.12 + 0.05*r + 0.10*t;
+  } else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+    c1 = [70,130,180];  c2 = [30,60,120];  baseAlpha = 0.15 + 0.25*r + 0.05*t;
+  } else if (code >= 71 && code <= 77) {
+    c1 = [180,200,255]; c2 = [255,255,255]; baseAlpha = 0.12 + 0.10*r;
+  } else if (code >= 95) {
+    c1 = [90,90,120];   c2 = [40,40,70];   baseAlpha = 0.15 + 0.15*r;
+  } else {
+    c1 = [230,230,230]; c2 = [250,250,250]; baseAlpha = 0.10 + 0.10*t;
   }
-
-  const a1 = clamp01(baseAlpha);
-  const a2 = clamp01(baseAlpha * 0.9);
+  const a1 = clamp01(baseAlpha), a2 = clamp01(baseAlpha*0.9);
   return `linear-gradient(135deg, rgba(${c1[0]},${c1[1]},${c1[2]},${a1}), rgba(${c2[0]},${c2[1]},${c2[2]},${a2}))`;
 }
 
@@ -113,13 +114,12 @@ function activateTab(which) {
     btn?.classList.toggle("active", active);
     btn?.setAttribute("aria-selected", active ? "true" : "false");
   });
-  Object.entries(tabPanels).forEach(([k, panel]) => { if (panel) panel.hidden = k !== which; });
+  Object.entries(tabPanels).forEach(([k, panel]) => { if(panel) panel.hidden = k !== which; });
 
   if (which === "weekmap"  && lastData) renderWeekMap(lastData);
   if (which === "weekhour" && lastData) { buildWeekHourTabs(); renderWeekHourly(0); }
   if (which === "sun"      && lastGeo.lat != null) loadPVGIS();
 }
-
 tabButtons.overview?.addEventListener("click", () => activateTab("overview"));
 tabButtons.weekmap ?.addEventListener("click", () => activateTab("weekmap"));
 tabButtons.weekhour?.addEventListener("click", () => activateTab("weekhour"));
@@ -151,7 +151,7 @@ $("btnLocate")?.addEventListener("click", () => {
   }, () => setStatus("Impossible d'obtenir la position.", "err"), { enableHighAccuracy: true, timeout: 10000 });
 });
 
-// auto-suggestions
+// suggestions
 const suggestions = $("suggestions");
 let debounce;
 $("place")?.addEventListener("input", (e) => {
@@ -244,13 +244,10 @@ async function fetchAndRender({ name, lat, lon }) {
     renderDaily(j);
     renderHourly(j);
 
-    // onglets “cartes”
-    if (!tabPanels.weekmap?.hidden) renderWeekMap(j);
+    if (!tabPanels.weekmap?.hidden)  renderWeekMap(j);
     buildWeekHourTabs();
     if (!tabPanels.weekhour?.hidden) renderWeekHourly(0);
-
-    // PVGIS si onglet visible
-    if (!tabPanels.sun?.hidden) loadPVGIS();
+    if (!tabPanels.sun?.hidden)      loadPVGIS();
 
     setStatus(`Données à jour — ${new Date().toLocaleString("fr-FR")}`, "ok");
   } catch (e) {
@@ -314,50 +311,37 @@ function renderHourly(j) {
   const ctx2d = canvas.getContext("2d");
 
   const tempColor = (context) => {
-    const chart = context.chart;
-    const { chartArea } = chart || {};
-    if (!chartArea) return "#3fb37f";
-    const grad = ctx2d.createLinearGradient(0, chartArea.bottom, 0, chartArea.top);
-    grad.addColorStop(0, "#3fb37f");
-    grad.addColorStop(0.5, "#f59e0b");
-    grad.addColorStop(1, "#ef4444");
-    return grad;
+    const c = context.chart; const area = c?.chartArea;
+    if (!area) return "#3fb37f";
+    const g = ctx2d.createLinearGradient(0, area.bottom, 0, area.top);
+    g.addColorStop(0, "#3fb37f"); g.addColorStop(0.5, "#f59e0b"); g.addColorStop(1, "#ef4444");
+    return g;
   };
-
-  const blueFill  = "rgba(56,189,248,0.6)";
-  const blueLine  = "rgba(56,189,248,0.9)";
-  const windCol   = "rgba(100,116,139,0.9)";
+  const blueFill = "rgba(56,189,248,0.6)", blueLine = "rgba(56,189,248,0.9)", windCol = "rgba(100,116,139,0.9)";
 
   chart = new Chart(canvas, {
     type: chartType,
     data: {
       labels,
       datasets: [
-        { label: "Température (°C)", data: tempArr, yAxisID: "y1", tension:.3, borderWidth:2, pointRadius:0,
-          backgroundColor: chartType === "bar" ? tempColor : undefined,
-          borderColor:     chartType === "line" ? tempColor : undefined },
-        { label: "Prob. pluie (%)", data: popArr, yAxisID: "y2", tension:.3, borderWidth:2, pointRadius:0,
-          backgroundColor: chartType === "bar" ? blueFill : undefined,
-          borderColor:     chartType === "line" ? blueLine : undefined },
-        { label: `Vent (${useGusts ? "rafales" : "moyen"}) (km/h)`, data: windArr, yAxisID: "y3", tension:.3, borderWidth:2, pointRadius:0,
-          backgroundColor: chartType === "bar" ? "rgba(100,116,139,0.35)" : undefined,
-          borderColor:     chartType === "line" ? windCol : undefined },
+        { label:"Température (°C)", data:tempArr, yAxisID:"y1", tension:.3, borderWidth:2, pointRadius:0,
+          backgroundColor: chartType==="bar"? tempColor:undefined, borderColor: chartType==="line"? tempColor:undefined },
+        { label:"Prob. pluie (%)", data:popArr,  yAxisID:"y2", tension:.3, borderWidth:2, pointRadius:0,
+          backgroundColor: chartType==="bar"? blueFill:undefined, borderColor: chartType==="line"? blueLine:undefined },
+        { label:`Vent (${useGusts ? "rafales" : "moyen"}) (km/h)`, data:windArr, yAxisID:"y3", tension:.3, borderWidth:2, pointRadius:0,
+          backgroundColor: chartType==="bar"? "rgba(100,116,139,0.35)":undefined, borderColor: chartType==="line"? windCol:undefined },
       ]
     },
     options: {
-      animation: { duration: 250 },
-      responsive: true,
-      scales: {
-        y1: { type:"linear", position:"left",
-              suggestedMin: Math.min(...tempArr, 0) - 2,
-              suggestedMax: Math.max(...tempArr, 10) + 2,
-              grid:{ drawOnChartArea:true } },
-        y2: { type:"linear", position:"right", min:0, max:100, grid:{ drawOnChartArea:false } },
-        y3: { type:"linear", position:"right", min:0, suggestedMax: Math.max(...windArr, 30) + 10,
-              grid:{ drawOnChartArea:false }, display:true, offset:true },
-        x:  { ticks: { maxTicksLimit: 12 } }
+      animation:{ duration:250 }, responsive:true,
+      scales:{
+        y1:{ type:"linear", position:"left",
+             suggestedMin: Math.min(...tempArr, 0)-2, suggestedMax: Math.max(...tempArr, 10)+2, grid:{ drawOnChartArea:true }},
+        y2:{ type:"linear", position:"right", min:0, max:100, grid:{ drawOnChartArea:false }},
+        y3:{ type:"linear", position:"right", min:0, suggestedMax: Math.max(...windArr,30)+10, grid:{ drawOnChartArea:false }, display:true, offset:true },
+        x:{ ticks:{ maxTicksLimit:12 } }
       },
-      plugins: { legend:{ display:true }, tooltip:{ mode:"index", intersect:false } }
+      plugins:{ legend:{ display:true }, tooltip:{ mode:"index", intersect:false } }
     }
   });
 }
@@ -376,7 +360,7 @@ function renderDaily(j) {
 
   dates.forEach((d, i) => {
     const icon = wmoIcon(wmo[i]);
-    const bg   = dayGradientSmart({ code: wmo[i], rain: Number(NX(rain[i], 0)), tmax: NX(tmax[i], null) });
+    const bg   = dayGradientSmart({ code: wmo[i], rain: Number(NX(rain[i],0)), tmax: NX(tmax[i], null) });
     const el = document.createElement("div");
     el.className = "day";
     el.style.backgroundImage = bg;
@@ -450,7 +434,6 @@ function buildWeekHourTabs() {
       ${new Date(d).toLocaleDateString("fr-FR", { weekday:"short", day:"2-digit" })}
     </button>
   `).join("");
-
   root.querySelectorAll(".wh-daybtn").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       root.querySelectorAll(".wh-daybtn").forEach(b=>b.classList.remove("active"));
@@ -459,28 +442,24 @@ function buildWeekHourTabs() {
     });
   });
 }
-
 function pickWMOForHour(dailyCode, pop) {
   if ((pop ?? 0) >= 50) return 80; // averse
   return dailyCode ?? 1;           // nuageux par défaut
 }
-
 function renderWeekHourly(dayIndex=0) {
   const grid = $("wh-grid");
   if (!grid || !lastData) return;
 
-  const H = lastData.hourly || {};
-  const ht = arr(H.time);
-  const t  = arr(H.temperature_2m);
-  const pP = arr(H.precipitation_probability);
-  const ws = arr(H.wind_speed_10m);
-  const wmoD = arr(lastData.daily?.weather_code);
-
+  const H   = lastData.hourly || {};
+  const ht  = arr(H.time);
+  const t   = arr(H.temperature_2m);
+  const pP  = arr(H.precipitation_probability);
+  const ws  = arr(H.wind_speed_10m);
+  const wmoD= arr(lastData.daily?.weather_code);
   if (!ht.length) { grid.innerHTML = ""; return; }
 
   const dayStart = new Date(lastData.daily.time[dayIndex]);
   const dayEnd   = new Date(dayStart); dayEnd.setDate(dayStart.getDate()+1);
-
   const idx = ht.map((x,i)=>({dt:new Date(x), i}))
                 .filter(o => o.dt >= dayStart && o.dt < dayEnd)
                 .map(o => o.i);
@@ -507,7 +486,7 @@ function renderWeekHourly(dayIndex=0) {
 }
 
 /* ==============================
-   PVGIS — Ensoleillement & Énergie
+   PVGIS — Ensoleillement & Énergie (+ fallback Open-Meteo)
 ============================== */
 $("pvReload")?.addEventListener("click", loadPVGIS);
 
@@ -521,68 +500,112 @@ async function loadPVGIS() {
     pvStat.textContent = "PVGIS bloqué en file:// — lance un petit serveur local (ex. « npx serve »).";
     return;
   }
-  pvStat.textContent = "Chargement PVGIS…";
 
   const peak = Math.max(0.1, Number($("pvPeak").value || 3));
   if (lastGeo.lat == null) { pvStat.textContent = "Position inconnue."; return; }
 
+  pvStat.textContent = "PVGIS : chargement…";
   try {
     const url = PVGIS_URL({ lat:lastGeo.lat, lon:lastGeo.lon, peak });
-    const r = await fetch(url);
-    if (!r.ok) { pvStat.textContent = `Erreur PVGIS (${r.status})`; return; }
+    const r = await fetch(url, { mode:"cors", cache:"no-store", headers:{ "Accept":"application/json" } });
+
+    if (!r.ok) {
+      pvStat.textContent = `PVGIS a répondu ${r.status} ${r.statusText}. Estimation Open-Meteo…`;
+      return await renderSolarFallback({ peak, pvStat, grid });
+    }
+
     const j = await r.json();
-
     const series = j?.outputs?.hourly || j?.outputs?.series || [];
-    if (!series.length) { pvStat.textContent = "Données PVGIS indisponibles."; return; }
+    if (!series.length) {
+      pvStat.textContent = "PVGIS: pas de série horaire. Estimation Open-Meteo…";
+      return await renderSolarFallback({ peak, pvStat, grid });
+    }
 
+    // Agrégation jour (P en W, pas horaire = 1h) + heures ensoleillées (seuil 1% du pic)
     const byDay = new Map();
-    const thresholdW = peak * 1000 * 0.01; // 1% du pic
+    const thresholdW = peak * 1000 * 0.01;
     for (const row of series) {
       const t = new Date(row.time || row.timestamp || row.date || row.time_utc);
-      const dayKey = t.toISOString().slice(0,10);
-      const P = Number(row.P ?? row.p ?? 0); // W (pas horaire)
-      if (!byDay.has(dayKey)) byDay.set(dayKey, { Wh:0, sunH:0 });
-      const obj = byDay.get(dayKey);
-      obj.Wh  += P;                 // somme des pas horaires (Wh)
-      if (P > thresholdW) obj.sunH += 1;
+      const key = t.toISOString().slice(0,10);
+      const P = Number(row.P ?? row.p ?? 0);
+      if (!byDay.has(key)) byDay.set(key, { Wh:0, sunH:0 });
+      const o = byDay.get(key);
+      o.Wh += P;              // Wh pour 1h
+      if (P > thresholdW) o.sunH += 1;
     }
 
-    const today = new Date();
-    const items = [];
-    for (let i=0;i<7;i++){
-      const d = new Date(today); d.setDate(today.getDate()+i);
-      const key = d.toISOString().slice(0,10);
-      const val = byDay.get(key) || { Wh: 0, sunH: 0 };
-      items.push({ date: key, sunH: val.sunH, kWh: val.Wh/1000 });
-    }
+    const items = next7days().map(key => {
+      const v = byDay.get(key) || { Wh:0, sunH:0 };
+      return { date:key, sunH: v.sunH, kWh: v.Wh/1000 };
+    });
 
-    grid.innerHTML = items.map(it => `
-      <div class="weekcell">
-        <div class="head">
-          <div>${new Date(it.date).toLocaleDateString("fr-FR", { weekday:"short", day:"2-digit" })}</div>
-          <i class="fa-solid fa-solar-panel icon"></i>
-        </div>
-        <div class="row">
-          <span class="chip"><i class="fa-solid fa-sun"></i> ${toFixed(it.sunH,0)} h</span>
-          <span class="chip"><i class="fa-solid fa-bolt"></i> ${toFixed(it.kWh,1)} kWh</span>
-        </div>
-        <div class="text-xs opacity-70 mt-2">Hypothèses : ${toFixed(peak,1)} kWc, 35° sud, pertes 14% (PVGIS)</div>
-      </div>
-    `).join("");
-
+    grid.innerHTML = renderSolarCards(items, peak);
     pvStat.textContent = "PVGIS chargé.";
   } catch (e) {
-    console.error(e);
-    pvStat.textContent = "Erreur PVGIS.";
+    console.error("[PVGIS] fetch error:", e);
+    pvStat.textContent = "PVGIS: erreur réseau/CORS. Estimation Open-Meteo…";
+    await renderSolarFallback({ peak, pvStat, grid });
   }
+}
+
+async function renderSolarFallback({ peak, pvStat, grid }) {
+  try {
+    const r = await fetch(OM_SOLAR_URL({ lat:lastGeo.lat, lon:lastGeo.lon }), { cache:"no-store" });
+    if (!r.ok) { pvStat.textContent = `Open-Meteo indisponible (${r.status}).`; return; }
+    const j = await r.json();
+
+    const time = arr(j.hourly?.time);
+    const sw   = arr(j.hourly?.shortwave_radiation); // W/m²
+    if (!time.length || !sw.length) { pvStat.textContent = "Open-Meteo : pas de données solaires."; return; }
+
+    // Approx simple : kWh = kWc * (SWR/1000) * (1-pertes)
+    const loss = 0.14;
+    const byDay = new Map();
+    for (let i=0; i<time.length; i++) {
+      const key = new Date(time[i]).toISOString().slice(0,10);
+      const kWh = peak * (Number(sw[i]||0)/1000) * (1 - loss); // 1h
+      byDay.set(key, (byDay.get(key) || 0) + kWh);
+    }
+
+    const items = next7days().map(key => ({ date:key, sunH:null, kWh: +(byDay.get(key)||0).toFixed(1) }));
+    grid.innerHTML = renderSolarCards(items, peak, true);
+    pvStat.textContent = "Estimation Open-Meteo (fallback).";
+  } catch (e) {
+    console.error("[Fallback] Open-Meteo error:", e);
+    pvStat.textContent = "Impossible de récupérer une estimation solaire.";
+  }
+}
+
+// helpers communs PV
+function next7days() {
+  const list = []; const today = new Date();
+  for (let i=0;i<7;i++){ const d = new Date(today); d.setDate(today.getDate()+i); list.push(d.toISOString().slice(0,10)); }
+  return list;
+}
+function renderSolarCards(items, peak, isFallback=false) {
+  return items.map(it => `
+    <div class="weekcell">
+      <div class="head">
+        <div>${new Date(it.date).toLocaleDateString("fr-FR", { weekday:"short", day:"2-digit" })}</div>
+        <i class="fa-solid fa-solar-panel icon"></i>
+      </div>
+      <div class="row">
+        ${it.sunH!=null ? `<span class="chip"><i class="fa-solid fa-sun"></i> ${it.sunH} h</span>` : `<span class="chip"><i class="fa-solid fa-sun"></i> ~</span>`}
+        <span class="chip"><i class="fa-solid fa-bolt"></i> ${Number(it.kWh||0).toFixed(1)} kWh</span>
+      </div>
+      <div class="text-xs opacity-70 mt-2">
+        ${isFallback ? `Estimation Open-Meteo — ${peak.toFixed(1)} kWc, pertes 14%`
+                     : `Hypothèses PVGIS — ${peak.toFixed(1)} kWc, tilt 35°, sud, pertes 14%`}
+      </div>
+    </div>
+  `).join("");
 }
 
 /* ==============================
    BOOT
 ============================== */
 window.addEventListener("DOMContentLoaded", () => {
-  const place = $("place");
-  if (place) place.value = DEFAULT_PLACE;
+  $("place")?.value = DEFAULT_PLACE;
   activateTab("overview");
   resolvePlace(DEFAULT_PLACE);
 });
